@@ -1,0 +1,6 @@
+# Independent session-scoped SSH plugin bundle row.
+# The package name, row id, entry id and panel id intentionally do not collide
+# with the legacy @linxin666/dsh-ssh installation.
+- insert:
+    - id: dsh-session-ssh
+      name: '@dsh-session-ssh/ssh'

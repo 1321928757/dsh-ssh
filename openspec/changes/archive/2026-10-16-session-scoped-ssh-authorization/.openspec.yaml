@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-14
+goal: Build a source-derived SSH plugin validated against DSH 0.2.0-rc.2, with
+  least-privilege session-bound host grants and no automatic installation

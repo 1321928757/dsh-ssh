@@ -1,0 +1,12 @@
+dsh-session-ssh
+
+This independent plugin is based on the SSH plugin source originally developed
+in zhu1090093659/dsh-web/packages/dsh-ssh and retains its Apache-2.0 provenance.
+It is not the @linxin666/dsh-ssh project and does not silently replace it.
+
+The input-bar multi-select interaction is independently implemented with
+reference to E:\\github\\dsh-mysql. The reference repository is not a build
+dependency. If substantial MIT-licensed source is copied in a future change,
+its copyright and license notice must be retained here and in the distribution.
+
+DeepSeek Harness trademarks belong to their respective owners.

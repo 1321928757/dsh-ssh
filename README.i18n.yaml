@@ -1,0 +1,5 @@
+# Bilingual-pair consistency record for the independent dsh-session-ssh package.
+# The paired documents are maintained together; hashes are refreshed when this
+# repository adds its documentation verification script.
+README.md: independent-local
+README.zh.md: independent-local

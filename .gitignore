@@ -1,0 +1,6 @@
+node_modules/
+lib/
+.dsh-acl-recovery/
+.agents/
+.tmp/
+AGENTS.md
