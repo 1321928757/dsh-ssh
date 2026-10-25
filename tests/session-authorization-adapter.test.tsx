@@ -101,13 +101,33 @@ describe('trusted Agent-scoped binding adapter', () => {
     expect(container.querySelector('[data-dsh-ssh-selector-trigger]')?.textContent).toContain('HK-8H16G')
   })
 
-  it('revokes a confirmed alias through the same bound capability', async () => {
+  it('revokes a confirmed alias through the same bound capability after an explicit submit', async () => {
     const remote = fakeRemote(['HK-8H16G'])
     const container = await renderTrustedSelector(remote)
     await act(async () => { (container.querySelector('[data-dsh-ssh-selector-trigger]') as HTMLButtonElement).click() })
     await act(async () => { (container.querySelector('[data-dsh-ssh-host="HK-8H16G"]') as HTMLButtonElement).click() })
+    // Marking the row is not a revocation: the Host keeps the grant.
+    expect(remote.revoke).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-dsh-ssh-host="HK-8H16G"]')?.getAttribute('data-state')).toBe('pending-revoke')
+    await act(async () => { (container.querySelector('[data-dsh-ssh-selector-revoke-selected]') as HTMLButtonElement).click() })
     await act(async () => { await Promise.resolve() })
     expect(remote.revoke).toHaveBeenCalledWith(['HK-8H16G'], expect.any(Number))
+    expect(container.querySelector('[data-dsh-ssh-host="HK-8H16G"]')?.getAttribute('data-state')).toBe('idle')
+  })
+
+  it('uses the refreshed revision when authorize and revoke are submitted in sequence', async () => {
+    const remote = fakeRemote()
+    const container = await renderTrustedSelector(remote)
+    await act(async () => { (container.querySelector('[data-dsh-ssh-selector-trigger]') as HTMLButtonElement).click() })
+    await act(async () => { (container.querySelector('[data-dsh-ssh-host="HK-8H16G"]') as HTMLButtonElement).click() })
+    await act(async () => { (container.querySelector('[data-dsh-ssh-selector-authorize]') as HTMLButtonElement).click() })
+    await act(async () => { await Promise.resolve() })
+    expect(remote.authorize).toHaveBeenCalledWith(['HK-8H16G'], 1)
+
+    await act(async () => { (container.querySelector('[data-dsh-ssh-host="HK-8H16G"]') as HTMLButtonElement).click() })
+    await act(async () => { (container.querySelector('[data-dsh-ssh-selector-revoke-selected]') as HTMLButtonElement).click() })
+    await act(async () => { await Promise.resolve() })
+    expect(remote.revoke).toHaveBeenCalledWith(['HK-8H16G'], 2)
   })
 
   it('stays fail-closed when the Remote namespaces are not mounted', async () => {

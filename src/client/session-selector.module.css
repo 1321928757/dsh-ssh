@@ -121,7 +121,18 @@
   overflow: hidden;
   border: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, .25));
   border-radius: 12px;
-  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-2, #fff));
+  /*
+   * The host's menu token is a translucent material (light #f8f9fa94, dark
+   * #43454a73) and officially expects a paired backdrop-filter. This popover
+   * owns no blur layer, so the material is composited over an opaque layer:
+   * the official tint survives, the content behind does not bleed through.
+   * `--dsh-ssh-menu-surface` switches the whole surface to another opaque layer.
+   */
+  background-color: var(--dsh-ssh-menu-surface, var(--dsw-alias-bg-layer-2, #fff));
+  background-image: linear-gradient(
+    var(--dsw-specific-menu, transparent),
+    var(--dsw-specific-menu, transparent)
+  );
   box-shadow: var(--dsw-shadow-lv3, 0 8px 26px rgba(0, 0, 0, .18));
   color: var(--dsw-alias-label-primary);
   font-size: 12px;
@@ -232,38 +243,37 @@
   font: inherit;
 }
 
-.hostRow:hover,
-.hostRowHighlighted {
-  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .08));
+/* Menu-language rows: selection is carried by tint + status pill, never by a
+   per-row tick control, and rows are not bordered cards. */
+.hostRowPendingGrant {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #5b8def) 8%, transparent);
 }
 
-.hostRowChecked {
-  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary, #5b8def) 38%, transparent);
-  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #5b8def) 9%, transparent);
+.hostRowGranted,
+.hostRowPendingRevoke {
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary, #737780) 8%, transparent);
+}
+
+.hostRowPendingRevoke {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #c43d3d) 45%, transparent);
+}
+
+.hostRow:hover:not(:disabled),
+.hostRowHighlighted:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .1));
 }
 
 .hostRow:disabled {
-  cursor: progress;
+  cursor: not-allowed;
   opacity: .7;
 }
 
-.checkbox {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
+.stateDot {
+  width: 7px;
+  height: 7px;
   flex: none;
-  border: 1px solid var(--dsw-alias-border-l1, #aaa);
-  border-radius: 5px;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.checkboxChecked {
-  border-color: var(--dsw-alias-brand-primary, #5b8def);
-  background: var(--dsw-alias-brand-primary, #5b8def);
+  border-radius: 50%;
+  background: var(--dsw-alias-state-success-primary, #29964b);
 }
 
 .hostCopy {
@@ -294,19 +304,35 @@
   color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary, #888));
 }
 
-.confirmed,
-.pending {
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
   flex: none;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
   font-size: 10px;
+  line-height: 1;
   white-space: nowrap;
 }
 
-.confirmed {
+.pillPending {
+  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary, #5b8def) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #5b8def) 10%, transparent);
+  color: var(--dsw-alias-brand-primary, #4d76d9);
+}
+
+.pillGranted {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary, #29964b) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #29964b) 12%, transparent);
   color: var(--dsw-alias-state-success-primary, #29964b);
 }
 
-.pending {
-  color: var(--dsw-alias-label-secondary, #888);
+.pillRevoke {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #c43d3d) 45%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #c43d3d) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary, #c43d3d);
 }
 
 .state {
@@ -339,10 +365,17 @@
 .footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 9px 10px;
   border-top: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, .2));
+}
+
+.footerGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .footer button {
@@ -372,9 +405,21 @@
   color: #fff !important;
 }
 
-.manage,
 .linkButton {
   color: var(--dsw-alias-brand-primary, #5b8def) !important;
+}
+
+.ghost {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--dsw-alias-label-secondary, #737780) !important;
+  padding: 0 6px !important;
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: transparent !important;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .1)) !important;
+  color: var(--dsw-alias-label-primary) !important;
 }
 
 .linkButton {
@@ -409,11 +454,16 @@
     width: min(410px, calc(100vw - 20px));
   }
 
-  .footer {
-    flex-wrap: wrap;
+  .footerGroup:first-child {
+    flex: 1 0 100%;
+  }
+
+  .footerGroup:last-child {
+    flex: 1 0 100%;
+    justify-content: flex-end;
   }
 
   .primary {
-    flex: 1 0 100%;
+    flex: 1 1 100%;
   }
 }

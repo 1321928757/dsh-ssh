@@ -12,9 +12,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as React from 'react'
+import { act } from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
+import { createRoot } from 'react-dom/client'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const root = join(import.meta.dirname, '..')
 const FIBER_STATES = ['pending', 'loading', 'active', 'failed', 'disposed', 'unloading'] as const
@@ -53,20 +57,24 @@ type Harness = {
   ctx: Context
   fiber: { state: number; then?: unknown }
   registered: string[]
+  components: Map<string, unknown>
   mounted: number
 }
 
 /** Mount the plugin the way the shell does: a fiber with this entry's inject list. */
-async function bootPlugin(options: { remote?: unknown } = {}): Promise<Harness> {
+async function bootPlugin(options: { remote?: unknown; onSelectPanel?: (id: string | null) => void } = {}): Promise<Harness> {
   const plugin = loadClientPlugin()
   const ctx = new Context()
   const registered: string[] = []
-  const harness: Harness = { ctx, fiber: { state: 0 }, registered, mounted: 0 }
+  const components = new Map<string, unknown>()
+  const harness: Harness = { ctx, fiber: { state: 0 }, registered, components, mounted: 0 }
 
   ctx.provide('slots', {
     inject: (_key: string, callback: () => () => void) => callback(),
-    register: (definition: { id?: string; key?: string }) => {
-      registered.push(String(definition.id ?? definition.key))
+    register: (definition: { id?: string; key?: string }, component?: unknown) => {
+      const id = String(definition.id ?? definition.key)
+      registered.push(id)
+      if (component !== undefined) components.set(id, component)
       return () => {}
     },
   })
@@ -75,7 +83,10 @@ async function bootPlugin(options: { remote?: unknown } = {}): Promise<Harness> 
     describe: () => ({ subscribe: () => () => {}, getSnapshot: () => ({ view: undefined }) }),
     get: () => undefined,
   })
-  ctx.provide('layout', { selectPanel: () => {}, panelInfo: undefined })
+  ctx.provide('layout', {
+    selectPanel: (id: string | null) => { options.onSelectPanel?.(id) },
+    panelInfo: undefined,
+  })
 
   const remote = options.remote ?? {
     $mount: async () => {
@@ -122,5 +133,31 @@ describe('browser half boot contract', () => {
     // the unavailable adapter, never a thrown render or a fabricated identity.
     const provider = (harness.ctx as unknown as { get(name: string): unknown }).get('sessions')
     expect(provider).toBeUndefined()
+  })
+
+  it('opens the SSH panel Hosts tab from the selector manage entry', async () => {
+    const selections: Array<string | null> = []
+    const harness = await bootPlugin({ onSelectPanel: id => selections.push(id) })
+    const slot = harness.components.get('dsh-session-ssh-selector') as React.ComponentType<{ sessionId?: string }>
+    expect(slot).toBeTypeOf('function')
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const reactRoot = createRoot(container)
+    try {
+      await act(async () => { reactRoot.render(React.createElement(slot, { sessionId: 'session-a' })) })
+      const trigger = container.querySelector('[data-dsh-ssh-selector-trigger]') as HTMLButtonElement
+      expect(trigger).not.toBeNull()
+      await act(async () => { trigger.click() })
+      const manage = [...container.querySelectorAll('button')].find(button => button.textContent === '管理 SSH 连接')
+      expect(manage).toBeDefined()
+      await act(async () => { (manage as HTMLButtonElement).click() })
+      // The entry is wired to the plugin's own panel, not to an unused adapter hook.
+      expect(selections).toContain('dsh-session-ssh-panel')
+      expect(container.querySelector('[role="dialog"]')).toBeNull()
+    } finally {
+      await act(async () => { reactRoot.unmount() })
+      container.remove()
+    }
   })
 })

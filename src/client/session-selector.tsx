@@ -258,12 +258,17 @@ function isSafeProvider(value: unknown): value is SafeSshAuthorizationAdapterPro
  * @param loadInventory - non-sensitive Host inventory loader; never authorization.
  * @param provider - verified adapter provider; defaults to the optional
  *   `sshAuthorization` service and stays fail-closed without one.
+ * @param onManageHosts - opens the plugin's own host management surface (the
+ *   panel's Hosts tab). Optional: without it the entry falls back to the
+ *   adapter's settings hook, and a shell that exposes neither leaves the
+ *   control inert.
  * @returns disposer releasing the slot registration.
  */
 export function registerSshSessionSelector(
   ctx: ClientContext,
   loadInventory?: SshSelectorInventoryLoader,
   provider?: SafeSshAuthorizationAdapterProvider,
+  onManageHosts?: () => void,
 ): () => void {
   const slots = (ctx as unknown as { slots?: InputSlotService }).slots
   if (slots === undefined || typeof slots.inject !== 'function' || typeof slots.register !== 'function') return noop
@@ -280,7 +285,14 @@ export function registerSshSessionSelector(
     } catch {
       adapter = createUnavailableSshAuthorizationAdapter()
     }
-    return <SshSessionSelector adapter={adapter} locked={props.locked} loadInventory={loadInventory} />
+    return (
+      <SshSessionSelector
+        adapter={adapter}
+        locked={props.locked}
+        loadInventory={loadInventory}
+        onManageHosts={onManageHosts}
+      />
+    )
   }))
 }
 
@@ -297,6 +309,28 @@ function setFrom(values: readonly string[]): Set<string> {
   return new Set(values)
 }
 
+/** Visual state of one host row: confirmed set plus the two pending drafts. */
+export type SshSelectorRowState = 'idle' | 'pending-grant' | 'granted' | 'pending-revoke'
+
+function toggleInSet(values: ReadonlySet<string>, value: string): Set<string> {
+  const next = new Set(values)
+  if (next.has(value)) next.delete(value)
+  else next.add(value)
+  return next
+}
+
+/**
+ * Derive the row state.
+ *
+ * Drafts never outrank the Host-confirmed set: a confirmed alias marked for
+ * removal is still authorized until the Host confirms the revocation, so it
+ * renders as `pending-revoke` rather than disappearing.
+ */
+export function rowStateOf(confirmed: boolean, draftAdd: boolean, draftRemoval: boolean): SshSelectorRowState {
+  if (confirmed) return draftRemoval ? 'pending-revoke' : 'granted'
+  return draftAdd ? 'pending-grant' : 'idle'
+}
+
 function displayLabel(authorized: readonly string[]): string {
   if (authorized.length === 0) return 'SSH 连接'
   if (authorized.length === 1) return authorized[0]!
@@ -306,6 +340,26 @@ function displayLabel(authorized: readonly string[]): string {
 function hostSummary(host: SshSelectorHost): string {
   const address = `${host.host}:${host.port}`
   return host.environment ? `${host.user}@${address} · ${host.environment}` : `${host.user}@${address}`
+}
+
+/** Row tint for each state; `idle` deliberately has none. */
+function rowStateClass(state: SshSelectorRowState): string | undefined {
+  switch (state) {
+    case 'pending-grant': return css.hostRowPendingGrant
+    case 'granted': return css.hostRowGranted
+    case 'pending-revoke': return css.hostRowPendingRevoke
+    default: return undefined
+  }
+}
+
+/** Status pill for each non-idle state. */
+function rowPill(state: SshSelectorRowState): { className: string; label: string } | undefined {
+  switch (state) {
+    case 'pending-grant': return { className: css.pillPending, label: '待授权' }
+    case 'granted': return { className: css.pillGranted, label: '已授权' }
+    case 'pending-revoke': return { className: css.pillRevoke, label: '待撤销' }
+    default: return undefined
+  }
 }
 
 function indexClamp(value: number, length: number): number {
@@ -357,7 +411,11 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
     : { ...snapshot, hosts, error: inventoryError ?? snapshot.error }
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [draftAliases, setDraftAliases] = useState<Set<string>>(new Set())
+  // Two independent drafts: adding an alias needs an explicit authorize, and
+  // removing one needs an explicit revoke. A single click never changes the
+  // Host-confirmed set.
+  const [draftAdds, setDraftAdds] = useState<Set<string>>(new Set())
+  const [draftRemovals, setDraftRemovals] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [highlighted, setHighlighted] = useState(0)
@@ -372,8 +430,12 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
     return needle === '' ? [...visibleSnapshot.hosts] : visibleSnapshot.hosts.filter(host => hostSearchText(host).includes(needle))
   }, [query, visibleSnapshot.hosts])
   const additions = useMemo(
-    () => [...draftAliases].filter(alias => !confirmedAliases.has(alias)),
-    [draftAliases, confirmedAliases],
+    () => [...draftAdds].filter(alias => !confirmedAliases.has(alias)),
+    [draftAdds, confirmedAliases],
+  )
+  const removals = useMemo(
+    () => [...draftRemovals].filter(alias => confirmedAliases.has(alias)),
+    [draftRemovals, confirmedAliases],
   )
   const staleConfirmed = useMemo(
     () => [...confirmedAliases].filter(alias => !visibleSnapshot.hosts.some(host => host.alias === alias)),
@@ -386,7 +448,8 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
   useEffect(() => {
     setOpen(false)
     setQuery('')
-    setDraftAliases(new Set())
+    setDraftAdds(new Set())
+    setDraftRemovals(new Set())
     setBusy(false)
     setMessage(null)
   }, [adapter])
@@ -406,7 +469,8 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
   }, [open, filteredHosts.length, highlighted])
 
   function openDialog(): void {
-    setDraftAliases(setFrom(snapshot.authorizedAliases))
+    setDraftAdds(new Set())
+    setDraftRemovals(new Set())
     setQuery('')
     setMessage(null)
     setOpen(true)
@@ -417,7 +481,8 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
   function closeDialog(): void {
     setOpen(false)
     setQuery('')
-    setDraftAliases(new Set())
+    setDraftAdds(new Set())
+    setDraftRemovals(new Set())
     setMessage(null)
     triggerRef.current?.focus()
   }
@@ -430,14 +495,23 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
     }
   }
 
-  async function authorizeAdditions(): Promise<void> {
-    const aliases = additions
+  /**
+   * Submit one pending change; a single click never reaches the Host.
+   *
+   * Success clears only the draft it submitted (revoking must not discard
+   * pending additions) and then re-reads the Host state. Failure keeps the
+   * draft so the user can retry, and re-reads whatever the Host really holds.
+   */
+  async function submit(kind: 'authorize' | 'revoke', aliases: readonly string[]): Promise<void> {
     if (aliases.length === 0 || !canWrite) return
     const bindingKey = snapshot.bindingKey
     setBusy(true)
     setMessage(null)
     try {
-      await adapter.authorize(aliases, snapshot.revision)
+      if (kind === 'authorize') await adapter.authorize(aliases, snapshot.revision)
+      else await adapter.revoke(aliases, snapshot.revision)
+      if (kind === 'authorize') setDraftAdds(new Set())
+      else setDraftRemovals(new Set())
       if (adapter.getSnapshot().bindingKey === bindingKey) await adapter.refresh()
     } catch (error) {
       setMessage(errorText(error))
@@ -447,35 +521,31 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
     }
   }
 
-  async function revokeAliases(aliases: readonly string[]): Promise<void> {
-    if (aliases.length === 0 || !canWrite) return
-    const bindingKey = snapshot.bindingKey
-    setBusy(true)
-    setMessage(null)
-    try {
-      await adapter.revoke(aliases, snapshot.revision)
-      if (adapter.getSnapshot().bindingKey === bindingKey) await adapter.refresh()
-    } catch (error) {
-      setMessage(errorText(error))
-      await refreshSnapshot()
-    } finally {
-      setBusy(false)
-    }
+  function authorizeAdditions(): void {
+    void submit('authorize', additions)
   }
 
-  function toggleDraft(alias: string): void {
-    if (busy) return
+  function revokeSelected(): void {
+    void submit('revoke', removals)
+  }
+
+  function revokeAll(): void {
+    void submit('revoke', [...confirmedAliases])
+  }
+
+  /**
+   * Toggle a row's pending intent.
+   *
+   * A confirmed alias only joins the removal draft; the Host keeps the
+   * authorization until the user submits the revocation.
+   */
+  function toggleRow(alias: string): void {
+    if (!canWrite) return
     if (confirmedAliases.has(alias)) {
-      const next = new Set(draftAliases)
-      next.delete(alias)
-      setDraftAliases(next)
-      void revokeAliases([alias])
+      setDraftRemovals(previous => toggleInSet(previous, alias))
       return
     }
-    const next = new Set(draftAliases)
-    if (next.has(alias)) next.delete(alias)
-    else next.add(alias)
-    setDraftAliases(next)
+    setDraftAdds(previous => toggleInSet(previous, alias))
   }
 
   function onDialogKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
@@ -499,13 +569,21 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
       const host = filteredHosts[indexClamp(highlighted, filteredHosts.length)]
       if (host) {
         event.preventDefault()
-        toggleDraft(host.alias)
+        toggleRow(host.alias)
       }
     }
   }
 
+  /**
+   * Leave the selector and open host management.
+   *
+   * The popover overlays the composer, so it closes first; the destination is
+   * the plugin's own panel (Hosts tab) when the shell wired one, otherwise the
+   * adapter's settings hook, otherwise nothing (a shell without either surface).
+   */
   function manageHosts(event?: ReactMouseEvent<HTMLButtonElement>): void {
     event?.preventDefault()
+    closeDialog()
     if (onManageHosts) onManageHosts()
     else adapter.openHostSettings?.()
   }
@@ -521,6 +599,14 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
         : snapshot.status === 'error'
           ? snapshot.error ?? 'SSH 连接列表读取失败'
           : undefined
+
+  const subtitle = snapshot.authorizedAliases.length === 0
+    ? '尚未授权连接 · 点击连接后授权到当前会话'
+    : [
+        `当前已授权 ${snapshot.authorizedAliases.length} 个`,
+        additions.length > 0 ? `新增 ${additions.length} 个待授权` : undefined,
+        removals.length > 0 ? `${removals.length} 个待撤销` : undefined,
+      ].filter((part): part is string => part !== undefined).join(' · ')
 
   return (
     <div
@@ -559,16 +645,13 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
           role="dialog"
           aria-modal="false"
           aria-labelledby={`${dialogId}-title`}
+          data-dsh-ssh-surface="opaque"
           onKeyDown={onDialogKeyDown}
         >
           <div className={css.header}>
             <div>
               <h2 id={`${dialogId}-title`} className={css.title}>选择 SSH 连接</h2>
-              <p className={css.subtitle} aria-live="polite">
-                {snapshot.authorizedAliases.length === 0
-                  ? '尚未授权连接 · 勾选后点击授权到当前会话'
-                  : `当前已授权 ${snapshot.authorizedAliases.length} 个 · 新增 ${additions.length} 个待授权`}
-              </p>
+              <p className={css.subtitle} aria-live="polite">{subtitle}</p>
             </div>
             <button type="button" className={css.close} aria-label="关闭 SSH 连接选择器" onClick={closeDialog}>
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg>
@@ -601,27 +684,30 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
               <div className={css.state}>没有匹配的 SSH 连接。</div>
             ) : null}
             {snapshot.status === 'ready' && visibleSnapshot.hosts.length > 0 ? filteredHosts.map((host, index) => {
-              const checked = draftAliases.has(host.alias)
-              const confirmed = confirmedAliases.has(host.alias)
+              const state = rowStateOf(confirmedAliases.has(host.alias), draftAdds.has(host.alias), draftRemovals.has(host.alias))
+              const pill = rowPill(state)
+              const selected = state === 'pending-grant' || state === 'pending-revoke'
               return (
                 <button
                   key={host.alias}
                   type="button"
                   role="option"
                   data-dsh-ssh-host={host.alias}
-                  aria-selected={checked}
-                  className={`${css.hostRow} ${checked ? css.hostRowChecked : ''} ${index === highlighted ? css.hostRowHighlighted : ''}`}
+                  data-state={state}
+                  aria-selected={selected}
+                  title={`${host.alias} · ${hostSummary(host)}`}
+                  className={`${css.hostRow}${rowStateClass(state) ? ` ${rowStateClass(state)}` : ''}${index === highlighted ? ` ${css.hostRowHighlighted}` : ''}`}
                   onMouseEnter={() => setHighlighted(index)}
-                  onClick={() => toggleDraft(host.alias)}
-                  disabled={busy}
+                  onClick={() => toggleRow(host.alias)}
+                  disabled={!canWrite}
                 >
-                  <span className={`${css.checkbox} ${checked ? css.checkboxChecked : ''}`} aria-hidden="true">{checked ? '✓' : ''}</span>
+                  {state === 'granted' ? <span className={css.stateDot} aria-hidden="true" /> : null}
                   <span className={css.hostCopy}>
                     <span className={css.hostAlias}>{host.alias}</span>
                     <span className={css.hostMeta}>{hostSummary(host)}</span>
                     {host.tags.length > 0 ? <span className={css.hostTags}>{host.tags.join(' · ')}</span> : null}
                   </span>
-                  <span className={confirmed ? css.confirmed : css.pending}>{confirmed ? '已授权' : '待授权'}</span>
+                  {pill ? <span className={`${css.pill} ${pill.className}`}>{pill.label}</span> : null}
                 </button>
               )
             }) : null}
@@ -630,21 +716,32 @@ export function SshSessionSelector({ adapter, locked = false, onManageHosts, loa
 
           {message ? <div className={css.error} role="alert">{message}</div> : null}
           <div className={css.footer}>
-            <button
-              type="button"
-              className={css.secondary}
-              data-dsh-ssh-selector-revoke-all=""
-              disabled={!canWrite || confirmedAliases.size === 0}
-              onClick={() => void revokeAliases([...confirmedAliases])}
-            >撤销全部授权</button>
-            <button type="button" className={css.manage} onClick={manageHosts}>管理 SSH 连接</button>
-            <button
-              type="button"
-              className={css.primary}
-              data-dsh-ssh-selector-authorize=""
-              disabled={!canWrite || additions.length === 0}
-              onClick={() => void authorizeAdditions()}
-            >{busy ? '处理中…' : additions.length > 0 ? `授权到当前会话（${additions.length}）` : '授权到当前会话'}</button>
+            <div className={css.footerGroup}>
+              <button
+                type="button"
+                className={css.ghost}
+                data-dsh-ssh-selector-revoke-all=""
+                disabled={!canWrite || confirmedAliases.size === 0}
+                onClick={() => revokeAll()}
+              >撤销全部授权</button>
+              <button type="button" className={css.ghost} onClick={manageHosts}>管理 SSH 连接</button>
+            </div>
+            <div className={css.footerGroup}>
+              <button
+                type="button"
+                className={css.secondary}
+                data-dsh-ssh-selector-revoke-selected=""
+                disabled={!canWrite || removals.length === 0}
+                onClick={() => revokeSelected()}
+              >{removals.length > 0 ? `撤销所选（${removals.length}）` : '撤销所选'}</button>
+              <button
+                type="button"
+                className={css.primary}
+                data-dsh-ssh-selector-authorize=""
+                disabled={!canWrite || additions.length === 0}
+                onClick={() => authorizeAdditions()}
+              >{busy ? '处理中…' : additions.length > 0 ? `授权到当前会话（${additions.length}）` : '授权到当前会话'}</button>
+            </div>
           </div>
         </div>
       ) : null}

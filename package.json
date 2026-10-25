@@ -1,6 +1,6 @@
 {
   "name": "@dsh-session-ssh/ssh",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Independent DeepSeek Harness SSH plugin with live-Agent-scoped authorization, dynamic SSH tools, host management, terminals, transfers, tunnels, and cluster execution.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",

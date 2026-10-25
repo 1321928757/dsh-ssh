@@ -189,7 +189,16 @@ export function apply(ctx: ClientContext): void {
     // The control is registered unconditionally: without a verified binding the
     // provider answers the fail-closed adapter, so the button exists and says
     // why it cannot write instead of the whole entry failing to boot.
-    disposers.push(registerSshSessionSelector(ctx, loadInventory, adapterProvider))
+    //
+    // "管理 SSH 连接" must land somewhere: it asks the panel controller to show
+    // the Hosts tab instead of calling an adapter hook nobody implements. The
+    // controller flips its state before asking the layout, so the panel opens
+    // even when the layout face is still settling.
+    const manageHosts = (): void => {
+      controller.setActiveTab('hosts')
+      controller.open()
+    }
+    disposers.push(registerSshSessionSelector(ctx, loadInventory, adapterProvider, manageHosts))
     let remoteDisposer: (() => Promise<void>) | undefined
     let mounting = false
     let active = true
